@@ -442,7 +442,35 @@ func componentDecoder(r *reader) interface{} {
 	return r.readBits(1)
 }
 
+// fixedWidthDecoder reads the fixedN encoders of unsigned integers as N raw bits
+// instead of a varint. Since the CS2 update of 2026-11-11 some uint8 fields come
+// as "fixed8" (CCSPlayerController.m_recentKillQueue, m_nFirstKill, m_nKillCount):
+// read as a varint, a value >= 128 eats one more byte and misaligns the packet.
+// Backport of markus-wa/demoinfocs-golang#764.
+func fixedWidthDecoder(f *field) (fieldDecoder, bool) {
+	var n uint32
+
+	switch f.encoder {
+	case "fixed8":
+		n = 8
+	case "fixed16":
+		n = 16
+	case "fixed32":
+		n = 32
+	default:
+		return nil, false
+	}
+
+	return func(r *reader) interface{} {
+		return uint64(r.readBits(n))
+	}, true
+}
+
 func findDecoder(f *field) fieldDecoder {
+	if d, ok := fixedWidthDecoder(f); ok {
+		return d
+	}
+
 	if v, ok := fieldTypeFactories[f.fieldType.baseType]; ok {
 		return v(f)
 	}
@@ -459,6 +487,10 @@ func findDecoder(f *field) fieldDecoder {
 }
 
 func findDecoderByBaseType(f *field) fieldDecoder {
+	if d, ok := fixedWidthDecoder(f); ok {
+		return d
+	}
+
 	if v, ok := fieldTypeFactories[f.fieldType.genericType.baseType]; ok {
 		return v(f)
 	}
